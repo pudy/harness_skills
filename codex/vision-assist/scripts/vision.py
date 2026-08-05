@@ -344,23 +344,39 @@ def process_image(image, args):
     return run_image_ocr(image, args)
 
 
+def extract_pdf_text(pdf_path, max_pages):
+    """Native local text extraction via pdfplumber; returns combined text or None."""
+    try:
+        import pdfplumber
+    except ImportError:
+        return None
+    try:
+        parts = []
+        with pdfplumber.open(pdf_path) as pdf:
+            total = len(pdf.pages)
+            for i, page in enumerate(pdf.pages):
+                if i >= max_pages:
+                    break
+                t = (page.extract_text() or "").strip()
+                if t:
+                    parts.append(f"===== PDF page {i + 1}/{min(total, max_pages)} (text) =====\n{t}")
+        return "\n\n".join(parts) if parts else None
+    except Exception:
+        return None
+
+
 def process_pdf(source, local, tmpdir, args, pdf_max_pages, pdf_dpi):
-    """PDF pipeline:
-    - public URL PDF: try native file_url first (models with file support only)
-    - otherwise render pages to images and reuse the image pipeline (API -> OCR)
+    """PDF pipeline, local-first:
+    1. native text extraction (pdfplumber) - accurate, fast, free
+    2. if no extractable text (scanned/image PDF): render pages -> vision API -> OCR
     """
-    if is_url(source) and args.mode in ("auto", "api"):
-        proc, code = run_api_with_retry(source, args.compact, args.prompt, file_input=True)
-        if proc is not None and code == 0:
-            sys.stdout.write(proc.stdout)
-            sys.stderr.write(proc.stderr)
+    if args.mode == "auto":
+        text = extract_pdf_text(local, pdf_max_pages)
+        if text:
+            sys.stdout.write(text + "\n")
+            sys.stderr.write("engine: pdf native text extraction\n")
             return 0
-        if args.mode == "api":
-            if proc is not None:
-                sys.stderr.write(proc.stderr)
-            sys.stderr.write("native PDF URL read failed; --mode api has no rendered-pages fallback.\n")
-            return code or 1
-        sys.stderr.write("native PDF URL read failed; falling back to rendered pages.\n")
+        sys.stderr.write("no extractable text (scanned/image PDF); falling back to rendered pages.\n")
 
     if importlib.util.find_spec("fitz") is None:
         sys.stderr.write("ERROR: PDF support needs PyMuPDF. Run: pip install PyMuPDF\n")

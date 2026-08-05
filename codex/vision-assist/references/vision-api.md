@@ -34,16 +34,19 @@ free, local, and noticeably more accurate for Chinese.
 
 ## PDF and URL input
 
-- **Local PDF** (`--image file.pdf`): pages are rendered to PNG (PyMuPDF,
-  `pip install PyMuPDF`) and read through the same image pipeline; see
+- **Local-first, always**: a PDF is first read from its native text layer with
+  pdfplumber - accurate, fast, free. Only when extraction returns nothing
+  (scanned or image-only PDFs) do pages get rendered (PyMuPDF, `pip install
+  PyMuPDF`) and read through the vision API → OCR pipeline. See
   `pdf_max_pages` / `pdf_dpi` in config.
-- **Public PDF URL** (`--url https://.../x.pdf`): tries native `file_url`
-  reading first (better layout/table handling), then falls back to rendering
-  the downloaded file into pages.
+- **Public PDF URL** (`--url https://.../x.pdf`): downloaded first, then the
+  same local-first flow applies.
 - **Public image URL** (`--url https://.../x.png`): downloaded to a temp file
   first, so local OCR fallback still applies.
-- Zhipu's `file_url` only accepts http(s) URLs (base64 data URLs are rejected,
-  error 1214); local files must be rendered to images first.
+- Low-level: `describe_with_image.py --file <pdf-url>` still supports Zhipu's
+  native `file_url` reading (glm-4.6v-flash / glm-4.1v-thinking-flash only),
+  but the default pipeline no longer relies on it. Zhipu's `file_url` only
+  accepts http(s) URLs (base64 data URLs are rejected, error 1214).
 
 ## Other free providers
 

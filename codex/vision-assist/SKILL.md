@@ -1,6 +1,6 @@
 ---
 name: vision-assist
-description: Read and interpret image files and PDFs (screenshots, photos, UI captures, charts, documents) when the active model lacks native vision input. Use when the user asks Codex to look at, read, analyze, or summarize an image, screenshot, photo, chart, UI capture, PDF, or document, or when image/view_image input fails with "does not support image inputs", or when a message contains "image content omitted". Uses a FREE vision API first (Zhipu GLM free models only) and automatically falls back to local OCR (Windows built-in / PaddleOCR / Tesseract) when the API is rate-limited or unreachable. PDFs are rendered to page images (PyMuPDF) or read natively from public URLs (file_url). Never uses paid APIs; paid image recognition is another skill's responsibility. Cross-platform.
+description: Read and interpret image files and PDFs (screenshots, photos, UI captures, charts, documents) when the active model lacks native vision input. Use when the user asks Codex to look at, read, analyze, or summarize an image, screenshot, photo, chart, UI capture, PDF, or document, or when image/view_image input fails with "does not support image inputs", or when a message contains "image content omitted". Uses a FREE vision API first (Zhipu GLM free models only) and automatically falls back to local OCR (Windows built-in / PaddleOCR / Tesseract) when the API is rate-limited or unreachable. PDFs are read via local native text extraction first, falling back to page rendering + vision/OCR for scanned files. Never uses paid APIs; paid image recognition is another skill's responsibility. Cross-platform.
 ---
 
 # Vision Assist (图片读取与视觉辅助)
@@ -40,14 +40,13 @@ the current model can already see images, so the skill is disabled by design.
    `python scripts/vision.py --image "<path>"`
    By default it calls the free vision API first and, if that fails (rate limit,
    network), automatically falls back to local OCR.
-3. **PDF?** Local PDFs are rendered page by page and read through the same
-   API → OCR pipeline (`pdf_max_pages` / `pdf_dpi` in config). Public PDF
-   URLs try native `file_url` reading first (glm-4.6v-flash /
-   glm-4.1v-thinking-flash), then fall back to rendered pages. Requires
-   PyMuPDF: `pip install PyMuPDF`.
+3. **PDF?** Local-first: the PDF's text layer is extracted directly with
+   pdfplumber (accurate, fast, zero API cost). If nothing comes out (scanned
+   or image-based PDF), pages are rendered (PyMuPDF) and read through the
+   same API → OCR pipeline (`pdf_max_pages` / `pdf_dpi` in config).
 4. **Public URL?** `python scripts/vision.py --url "<http(s) url>"` works for
-   images and PDFs; images are downloaded to a temp file first so OCR fallback
-   still works.
+   images and PDFs; everything is downloaded to a temp file first (PDFs then
+   follow the local-first flow, images keep OCR fallback).
 5. **Local-only / exact text?** Rare; force OCR with:
    `python scripts/vision.py --image "<path>" --mode ocr`
    If the result is garbled, retry with tuning flags:
