@@ -1,0 +1,3 @@
+# Never commit real API keys.
+config.json
+__pycache__/

@@ -1,0 +1,10 @@
+{
+  "api_key": "PASTE_YOUR_ZHIPU_KEY_HERE",
+  "endpoint": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+  "model": "glm-4.6v-flash",
+  "fallback_models": ["glm-4.1v-thinking-flash", "glm-4v-flash"],
+  "allowed_models": ["deepseek-v4-flash", "deepseek-v4-pro"],
+  "timeout_ms": 60000,
+  "max_tokens": 4000,
+  "min_reply_chars": 10
+}

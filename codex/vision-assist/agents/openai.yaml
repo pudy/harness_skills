@@ -1,0 +1,4 @@
+interface:
+  display_name: "图片读取与视觉辅助"
+  short_description: "用本地OCR和免费视觉模型（智谱GLM）读取图片/截图，让纯文本模型也能处理图像；不使用付费API"
+  default_prompt: "使用 $vision-assist 读取这张截图里的文字并说明界面内容。"
