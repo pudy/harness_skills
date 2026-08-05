@@ -11,7 +11,8 @@ Config sources (first match wins):
   - config.json next to the skill (see config.json.example)
 
 Usage:
-  python describe_with_image.py --image <path> [--compact] [--prompt "..."]
+  python describe_with_image.py --image <path-or-url> [--compact] [--prompt "..."]
+  python describe_with_image.py --image <pdf-url> --file [--compact] [--prompt "..."]
 """
 
 import argparse
@@ -37,6 +38,9 @@ MODEL_MAX_TOKENS = {
     "glm-4.1v-thinking-flash": 16384,
 }
 
+# Models that accept file_url (PDF/document) input; glm-4v-flash is image-only.
+MODEL_SUPPORTS_FILES = {"glm-4.6v-flash", "glm-4.1v-thinking-flash"}
+
 FULL_PROMPT = (
     "Describe this image in detail: all visible text (quote it exactly), "
     "UI elements, layout, and any numbers."
@@ -55,27 +59,50 @@ def load_config():
         return {}
 
 
-def build_payload(image_path, model, prompt, max_tokens):
-    mime, _ = mimetypes.guess_type(image_path)
-    if not mime or not mime.startswith("image/"):
-        mime = "image/png"
-    with open(image_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("ascii")
-    data_url = f"data:{mime};base64,{b64}"
+def is_url(s):
+    return bool(s) and (s.startswith("http://") or s.startswith("https://"))
+
+
+def build_payload(image, model, prompt, max_tokens, as_file=False):
+    """Build the chat payload.
+
+    - Public URL image -> image_url with the URL directly.
+    - Local image       -> base64 data URL (image_url).
+    - Public URL PDF    -> file_url (only models with file support).
+    - Local PDF         -> not supported here; render to images first.
+    """
+    if is_url(image):
+        if as_file:
+            content = [
+                {"type": "text", "text": prompt},
+                {"type": "file_url", "file_url": {"url": image}},
+            ]
+        else:
+            content = [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image}},
+            ]
+    else:
+        if as_file:
+            raise ValueError(
+                "local files must be rendered to images first; "
+                "file_url is only used for public URLs"
+            )
+        mime, _ = mimetypes.guess_type(image)
+        if not mime or not mime.startswith("image/"):
+            mime = "image/png"
+        with open(image, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        data_url = f"data:{mime};base64,{b64}"
+        content = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": data_url}},
+        ]
     return {
         "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                ],
-            }
-        ],
+        "messages": [{"role": "user", "content": content}],
         "max_tokens": max_tokens,
     }
-
 
 def main():
     for stream in (sys.stdout, sys.stderr):
@@ -89,6 +116,7 @@ def main():
     ap.add_argument("--model", default=os.environ.get("VISION_API_MODEL") or cfg.get("model") or DEFAULT_MODEL)
     ap.add_argument("--compact", action="store_true", help="focused fact-only extraction (fewer tokens)")
     ap.add_argument("--prompt", help="specific question to ask about the image")
+    ap.add_argument("--file", action="store_true", help="treat input as a file (PDF) via file_url; requires a public URL")
     ap.add_argument("--max-tokens", type=int, default=int(cfg.get("max_tokens") or DEFAULT_MAX_TOKENS))
     args = ap.parse_args()
     # Clamp to the model's real output cap (fallback models may be smaller).
@@ -99,7 +127,21 @@ def main():
     if not args.api_key or "PASTE" in args.api_key.upper():
         print("ERROR: no free vision-API key configured. Put your Zhipu key in config.json (see config.json.example).", file=sys.stderr)
         sys.exit(3)
-    if not os.path.isfile(args.image):
+    if args.file and not is_url(args.image):
+        print(
+            "ERROR: --file requires a public http(s) URL; local PDFs must be "
+            "rendered to images first (use vision.py).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if args.file and args.model not in MODEL_SUPPORTS_FILES:
+        print(
+            f"ERROR: model {args.model} does not support file_url input; "
+            f"use one of: {', '.join(sorted(MODEL_SUPPORTS_FILES))}.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if not is_url(args.image) and not os.path.isfile(args.image):
         print(f"ERROR: image not found: {args.image}", file=sys.stderr)
         sys.exit(2)
 
@@ -107,7 +149,9 @@ def main():
     if args.compact and args.prompt:
         prompt = args.prompt + "\nOnly return facts; do not expand into analysis."
 
-    payload = json.dumps(build_payload(args.image, args.model, prompt, args.max_tokens)).encode("utf-8")
+    payload = json.dumps(
+        build_payload(args.image, args.model, prompt, args.max_tokens, as_file=args.file)
+    ).encode("utf-8")
     req = urllib.request.Request(
         args.base_url,
         data=payload,

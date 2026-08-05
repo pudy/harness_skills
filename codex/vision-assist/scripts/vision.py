@@ -11,6 +11,8 @@ One command for the whole pipeline:
 Usage:
   python vision.py --check
   python vision.py --image <path>
+  python vision.py --url <http(s) url>          # image or PDF (public URL)
+  python vision.py --image <file.pdf>           # PDF: render pages, then API/OCR
   python vision.py --image <path> [--region x,y,w,h] [--scale 2] [--grayscale]
   python vision.py --image <path> --mode ocr
   python vision.py --image <path> --mode api [--compact] [--prompt "..."]
@@ -32,7 +34,15 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
+import urllib.error
+import urllib.request
+
+try:
+    from describe_with_image import MODEL_SUPPORTS_FILES
+except ImportError:  # pragma: no cover - keep a safe fallback
+    MODEL_SUPPORTS_FILES = {"glm-4.6v-flash", "glm-4.1v-thinking-flash"}
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.environ.get("VISION_CONFIG") or os.path.join(os.path.dirname(SCRIPT_DIR), "config.json")
@@ -139,7 +149,36 @@ def has_api_key():
     return bool(key) and key.strip() and "PASTE" not in key.upper()
 
 
-def run_api(image, compact, prompt, model=None):
+def is_url(s):
+    return bool(s) and (s.startswith("http://") or s.startswith("https://"))
+
+
+def is_pdf_source(s):
+    return bool(s) and s.lower().endswith(".pdf")
+
+
+def download_to_temp(url, tmpdir):
+    """Download a URL to a temp file; extension guessed from URL/content-type."""
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Codex vision-assist)"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        data = resp.read()
+        ctype = resp.headers.get("Content-Type", "") or ""
+    name = url.split("/")[-1].split("?")[0].lower()
+    if name.endswith(".pdf") or "pdf" in ctype.lower():
+        ext = ".pdf"
+    elif name.endswith((".jpg", ".jpeg")) or "jpeg" in ctype.lower() or "jpg" in ctype.lower():
+        ext = ".jpg"
+    elif name.endswith(".png") or "png" in ctype.lower():
+        ext = ".png"
+    else:
+        ext = ".bin"
+    path = os.path.join(tmpdir, "download" + ext)
+    with open(path, "wb") as fh:
+        fh.write(data)
+    return path
+
+
+def run_api(image, compact, prompt, model=None, file_input=False):
     if not has_api_key():
         sys.stderr.write(
             "API fallback skipped: no free vision-API key configured.\n"
@@ -150,6 +189,8 @@ def run_api(image, compact, prompt, model=None):
     cmd = [sys.executable, os.path.join(SCRIPT_DIR, "describe_with_image.py"), "--image", image]
     if model:
         cmd += ["--model", model]
+    if file_input:
+        cmd.append("--file")
     if compact:
         cmd.append("--compact")
     if prompt:
@@ -203,7 +244,7 @@ def classify_api_error(stderr):
     return "server"  # 5xx and anything unexpected: transient server issue
 
 
-def run_api_with_retry(image, compact, prompt):
+def run_api_with_retry(image, compact, prompt, file_input=False):
     """Free API with bounded retries and cross-model failover.
 
     Order: primary model (config `model`) -> fallback_models (config) ->
@@ -211,6 +252,7 @@ def run_api_with_retry(image, compact, prompt):
     moves to the next free model with no same-model retry. Permanent request
     errors jump straight to the next model; permanent account-level errors
     stop the chain immediately (same key, so other models fail the same way).
+    With file_input=True (PDF URLs), models without file_url support are skipped.
     """
     cfg = load_config()
     models = [cfg.get("model") or "glm-4.6v-flash"]
@@ -219,13 +261,15 @@ def run_api_with_retry(image, compact, prompt):
         models += [m for m in fb if isinstance(m, str) and m]
     seen = set()
     models = [m for m in models if not (m in seen or seen.add(m))]
+    if file_input:
+        models = [m for m in models if m in MODEL_SUPPORTS_FILES]
 
     proc, code = None, 1
     for model in models:
         attempt = 0
         while True:
             attempt += 1
-            proc, code = run_api(image, compact, prompt, model=model)
+            proc, code = run_api(image, compact, prompt, model=model, file_input=file_input)
             if proc is None or code == 0:
                 return proc, code
             action = classify_api_error(proc.stderr)
@@ -259,6 +303,129 @@ def run_api_with_retry(image, compact, prompt):
     return proc, code
 
 
+def ocr_image_text(image, args):
+    """Run local OCR; returns (exit_code, stdout_text, stderr_note)."""
+    engine, proc, err = run_ocr(image, args.region, args.scale, args.grayscale)
+    if err == "no engine":
+        return 2, None, (
+            "ERROR: no OCR engine available. See references/install.md "
+            "(PaddleOCR / Tesseract per platform).\n"
+        )
+    if proc.returncode != 0:
+        return 1, None, f"OCR engine ({engine}) failed.\n{proc.stderr}"
+    return 0, proc.stdout, f"engine: {engine}\n"
+
+
+def run_image_ocr(image, args):
+    code, text, note = ocr_image_text(image, args)
+    if text:
+        sys.stdout.write(text)
+    if note:
+        sys.stderr.write(note)
+    return code
+
+
+def process_image(image, args):
+    """Single image: API first (auto/api), OCR fallback (auto only)."""
+    if args.mode == "api" or has_api_key():
+        proc, code = run_api_with_retry(image, args.compact, args.prompt)
+        if proc is not None and code == 0:
+            sys.stdout.write(proc.stdout)
+            sys.stderr.write(proc.stderr)
+            return 0
+        if args.mode == "api":
+            if proc is not None:
+                sys.stderr.write(proc.stderr)
+            sys.stderr.write("API failed; --mode api has no OCR fallback.\n")
+            return code or 1
+        if proc is not None:
+            sys.stderr.write(proc.stderr)
+        sys.stderr.write("API failed; falling back to local OCR.\n")
+    return run_image_ocr(image, args)
+
+
+def process_pdf(source, local, tmpdir, args, pdf_max_pages, pdf_dpi):
+    """PDF pipeline:
+    - public URL PDF: try native file_url first (models with file support only)
+    - otherwise render pages to images and reuse the image pipeline (API -> OCR)
+    """
+    if is_url(source) and args.mode in ("auto", "api"):
+        proc, code = run_api_with_retry(source, args.compact, args.prompt, file_input=True)
+        if proc is not None and code == 0:
+            sys.stdout.write(proc.stdout)
+            sys.stderr.write(proc.stderr)
+            return 0
+        if args.mode == "api":
+            if proc is not None:
+                sys.stderr.write(proc.stderr)
+            sys.stderr.write("native PDF URL read failed; --mode api has no rendered-pages fallback.\n")
+            return code or 1
+        sys.stderr.write("native PDF URL read failed; falling back to rendered pages.\n")
+
+    if importlib.util.find_spec("fitz") is None:
+        sys.stderr.write("ERROR: PDF support needs PyMuPDF. Run: pip install PyMuPDF\n")
+        return 2
+
+    render = subprocess.run(
+        [
+            sys.executable, os.path.join(SCRIPT_DIR, "pdf_to_images.py"),
+            "--input", local, "--output-dir", tmpdir,
+            "--dpi", str(pdf_dpi), "--max-pages", str(pdf_max_pages),
+        ],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if render.returncode != 0:
+        sys.stderr.write(render.stderr)
+        return render.returncode
+    pages = [p for p in render.stdout.splitlines() if p.strip()]
+    if not pages:
+        sys.stderr.write("ERROR: no pages rendered.\n")
+        return 1
+
+    total = len(pages)
+    ok = 0
+    for idx, page in enumerate(pages, 1):
+        sys.stderr.write(f"--- PDF page {idx}/{total} ---\n")
+        if args.mode == "ocr":
+            code, text, note = ocr_image_text(page, args)
+            if code == 0:
+                sys.stdout.write(f"===== PDF page {idx}/{total} (OCR) =====\n")
+                sys.stdout.write(text)
+                sys.stderr.write(note)
+                ok += 1
+            else:
+                sys.stderr.write(note)
+            continue
+        proc, code = run_api_with_retry(page, args.compact, args.prompt)
+        if proc is not None and code == 0:
+            sys.stdout.write(f"===== PDF page {idx}/{total} (vision) =====\n")
+            sys.stdout.write(proc.stdout)
+            sys.stderr.write(proc.stderr)
+            ok += 1
+            continue
+        if args.mode == "api":
+            if proc is not None:
+                sys.stderr.write(proc.stderr)
+            sys.stderr.write(f"page {idx}: API failed; skipping (--mode api has no OCR fallback).\n")
+            continue
+        if proc is not None:
+            sys.stderr.write(proc.stderr)
+        sys.stderr.write(f"page {idx}: API failed; falling back to local OCR.\n")
+        code, text, note = ocr_image_text(page, args)
+        if code == 0:
+            sys.stdout.write(f"===== PDF page {idx}/{total} (OCR) =====\n")
+            sys.stdout.write(text)
+            sys.stderr.write(note)
+            ok += 1
+        else:
+            sys.stderr.write(note)
+            sys.stderr.write(f"page {idx}: all methods failed.\n")
+    if ok == 0:
+        sys.stderr.write("ERROR: no PDF page could be read.\n")
+        return 1
+    return 0
+
+
 def main():
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -266,6 +433,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true", help="print engine/guard/API status and exit")
     ap.add_argument("--image", help="image file to read")
+    ap.add_argument("--url", help="http(s) URL of an image or PDF")
     ap.add_argument("--latest", action="store_true", help="recover the most recent pasted image first")
     ap.add_argument("--mode", choices=["auto", "ocr", "api"], default="auto")
     ap.add_argument("--compact", action="store_true", help="focused fact-only output for the API fallback")
@@ -287,11 +455,12 @@ def main():
         print(f"free vision api key: {'configured' if has_api_key() else 'not configured'}")
         cfg = load_config()
         print(f"api model: {cfg.get('model') or 'glm-4.6v-flash (default)'}")
+        print(f"pdf rendering (PyMuPDF): {'yes' if importlib.util.find_spec('fitz') else 'no'}")
         return 0
 
     provider_guard()
 
-    image = args.image
+    source = args.url or args.image
     if args.latest:
         if platform.system().lower() == "windows":
             sys.stderr.write(
@@ -307,67 +476,42 @@ def main():
         if proc.returncode != 0:
             sys.stderr.write(proc.stderr)
             sys.exit(1)
-        image = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else None
-        if not image:
+        source = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else None
+        if not source:
             sys.stderr.write("ERROR: recovery returned no image path.\n")
             sys.exit(1)
-        sys.stderr.write(f"recovered image: {image}\n")
+        sys.stderr.write(f"recovered image: {source}\n")
 
-    if not image:
-        sys.stderr.write("ERROR: no image given. Use --image <path> or --latest.\n")
-        sys.exit(1)
-    if not os.path.isfile(image):
-        sys.stderr.write(f"ERROR: image not found: {image}\n")
+    if not source:
+        sys.stderr.write("ERROR: no image given. Use --image <path>, --url <http(s)>, or --latest.\n")
         sys.exit(1)
 
-    if args.mode == "ocr":
-        engine, proc, err = run_ocr(image, args.region, args.scale, args.grayscale)
-        if err == "no engine":
-            sys.stderr.write(
-                "ERROR: no OCR engine available. See references/install.md "
-                "(PaddleOCR / Tesseract per platform).\n"
-            )
-            sys.exit(2)
-        if proc.returncode != 0:
-            sys.stderr.write(proc.stderr)
-            sys.stderr.write(f"OCR engine ({engine}) failed.\n")
+    cfg = load_config()
+    pdf_max_pages = int(cfg.get("pdf_max_pages") or 20)
+    pdf_dpi = int(cfg.get("pdf_dpi") or 150)
+    tmpdir = tempfile.mkdtemp(prefix="vision_tmp_")
+    try:
+        local = source
+        if is_url(source):
+            sys.stderr.write(f"downloading: {source}\n")
+            try:
+                local = download_to_temp(source, tmpdir)
+            except Exception as exc:
+                sys.stderr.write(f"ERROR: download failed: {exc}\n")
+                sys.exit(1)
+            sys.stderr.write(f"downloaded to: {local}\n")
+        elif not os.path.isfile(local):
+            sys.stderr.write(f"ERROR: image not found: {local}\n")
             sys.exit(1)
-        sys.stdout.write(proc.stdout)
-        sys.stderr.write(f"engine: {engine}\n")
-        sys.exit(0)
 
-    # auto / api: try the free vision API first.
-    if args.mode == "api" or has_api_key():
-        proc, code = run_api_with_retry(image, args.compact, args.prompt)
-        if proc is not None and code == 0:
-            sys.stdout.write(proc.stdout)
-            sys.stderr.write(proc.stderr)
-            sys.exit(0)
-        if args.mode == "api":
-            if proc is not None:
-                sys.stderr.write(proc.stderr)
-            sys.stderr.write("API failed; --mode api has no OCR fallback.\n")
-            sys.exit(code or 1)
-        if proc is not None:
-            sys.stderr.write(proc.stderr)
-        sys.stderr.write("API failed; falling back to local OCR.\n")
+        if is_pdf_source(source) or local.lower().endswith(".pdf"):
+            return process_pdf(source, local, tmpdir, args, pdf_max_pages, pdf_dpi)
 
-    engine, proc, err = run_ocr(image, args.region, args.scale, args.grayscale)
-    if err == "no engine":
-        sys.stderr.write(
-            "ERROR: no OCR engine available. See references/install.md "
-            "(PaddleOCR / Tesseract per platform).\n"
-        )
-        sys.exit(2)
-
-    if proc.returncode != 0:
-        sys.stderr.write(proc.stderr)
-        sys.stderr.write(f"OCR engine ({engine}) failed.\n")
-        sys.exit(1)
-    sys.stdout.write(proc.stdout)
-    sys.stderr.write(f"engine: {engine}\n")
-
-    return 0
+        if args.mode == "ocr":
+            return run_image_ocr(local, args)
+        return process_image(local, args)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 if __name__ == "__main__":

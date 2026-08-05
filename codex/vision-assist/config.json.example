@@ -6,5 +6,7 @@
   "allowed_models": ["deepseek-v4-flash", "deepseek-v4-pro"],
   "timeout_ms": 60000,
   "max_tokens": 4000,
-  "min_reply_chars": 10
+  "min_reply_chars": 10,
+  "pdf_max_pages": 20,
+  "pdf_dpi": 150
 }

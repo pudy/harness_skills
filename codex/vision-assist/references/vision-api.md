@@ -27,7 +27,22 @@ free, local, and noticeably more accurate for Chinese.
 - Free models (tried in this order): `glm-4.6v-flash` (default, best overall),
   `glm-4.1v-thinking-flash` (reasoning; stronger on charts/GUI), `glm-4v-flash`
   (oldest but stable; 1024-token output cap)
+- Only `glm-4.6v-flash` and `glm-4.1v-thinking-flash` accept `file_url` input
+  (PDF/documents); `glm-4v-flash` is image-only.
 - Docs: <https://docs.bigmodel.cn/cn/guide/start/model-overview>
+
+## PDF and URL input
+
+- **Local PDF** (`--image file.pdf`): pages are rendered to PNG (PyMuPDF,
+  `pip install PyMuPDF`) and read through the same image pipeline; see
+  `pdf_max_pages` / `pdf_dpi` in config.
+- **Public PDF URL** (`--url https://.../x.pdf`): tries native `file_url`
+  reading first (better layout/table handling), then falls back to rendering
+  the downloaded file into pages.
+- **Public image URL** (`--url https://.../x.png`): downloaded to a temp file
+  first, so local OCR fallback still applies.
+- Zhipu's `file_url` only accepts http(s) URLs (base64 data URLs are rejected,
+  error 1214); local files must be rendered to images first.
 
 ## Other free providers
 
@@ -46,7 +61,9 @@ free, local, and noticeably more accurate for Chinese.
   "allowed_models": ["deepseek-v4-flash", "deepseek-v4-pro"],
   "timeout_ms": 60000,
   "max_tokens": 4000,
-  "min_reply_chars": 10
+  "min_reply_chars": 10,
+  "pdf_max_pages": 20,
+  "pdf_dpi": 150
 }
 ```
 
