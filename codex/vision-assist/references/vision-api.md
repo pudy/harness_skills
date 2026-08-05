@@ -36,9 +36,15 @@ free, local, and noticeably more accurate for Chinese.
 
 - **Local-first, always**: a PDF is first read from its native text layer with
   pdfplumber - accurate, fast, free. Only when extraction returns nothing
-  (scanned or image-only PDFs) do pages get rendered (PyMuPDF, `pip install
-  PyMuPDF`) and read through the vision API → OCR pipeline. See
-  `pdf_max_pages` / `pdf_dpi` in config.
+  (scanned or image-only PDFs) or looks garbled do pages get rendered
+  (PyMuPDF, `pip install PyMuPDF`) and read through the vision API → OCR
+  pipeline. See `pdf_max_pages` / `pdf_dpi` in config.
+- **Garbled-text detection**: browser-printed PDFs (Chrome/Skia) sometimes
+  have a broken ToUnicode mapping - extraction returns non-empty garbage
+  (private-use-area / Kangxi characters, or excessive `?`). The pipeline
+  treats extraction as garbled when suspicious characters exceed ~10% (PUA /
+  Kangxi / replacement / control) or `?` exceeds 30%, and falls back to
+  rendered pages automatically.
 - **Public PDF URL** (`--url https://.../x.pdf`): downloaded first, then the
   same local-first flow applies.
 - **Public image URL** (`--url https://.../x.png`): downloaded to a temp file

@@ -42,8 +42,9 @@ the current model can already see images, so the skill is disabled by design.
    network), automatically falls back to local OCR.
 3. **PDF?** Local-first: the PDF's text layer is extracted directly with
    pdfplumber (accurate, fast, zero API cost). If nothing comes out (scanned
-   or image-based PDF), pages are rendered (PyMuPDF) and read through the
-   same API → OCR pipeline (`pdf_max_pages` / `pdf_dpi` in config).
+   or image-based PDF) or the extraction looks garbled (broken ToUnicode
+   mapping, e.g. Chrome print-to-PDF), pages are rendered (PyMuPDF) and read
+   through the same API → OCR pipeline (`pdf_max_pages` / `pdf_dpi` in config).
 4. **Public URL?** `python scripts/vision.py --url "<http(s) url>"` works for
    images and PDFs; everything is downloaded to a temp file first (PDFs then
    follow the local-first flow, images keep OCR fallback).

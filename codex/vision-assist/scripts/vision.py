@@ -26,6 +26,8 @@ Exit codes:
 """
 
 import argparse
+import contextlib
+import io
 import importlib.util
 import json
 import os
@@ -344,22 +346,78 @@ def process_image(image, args):
     return run_image_ocr(image, args)
 
 
+# Ratio of suspicious chars (broken ToUnicode mapping, e.g. Chrome print-to-PDF)
+# above which native extraction is treated as garbage and vision is used.
+GARBLED_RATIO_THRESHOLD = 0.10
+# Literal '?' can legitimately appear in text (questions, code); only treat it
+# as a corruption signal when it dominates the page.
+GARBLED_QMARK_THRESHOLD = 0.30
+
+
+def _is_suspicious_char(ch):
+    o = ord(ch)
+    if ch == "?" or o == 0xFFFD:
+        return True
+    if 0xE000 <= o <= 0xF8FF:  # private use area (unmapped glyphs)
+        return True
+    if 0x2F00 <= o <= 0x2FDF:  # Kangxi radicals (broken ToUnicode mapping)
+        return True
+    if o < 32 and ch not in "\t\n\r":
+        return True
+    return False
+
+
+def garbled_ratio(text):
+    if not text:
+        return 0.0
+    # literal '?' is handled separately so normal question marks don't trip this
+    return sum(1 for ch in text if _is_suspicious_char(ch) and ch != "?") / len(text)
+
+
+def is_garbled_text(text):
+    if not text:
+        return False
+    q_ratio = text.count("?") / len(text)
+    return (
+        garbled_ratio(text) >= GARBLED_RATIO_THRESHOLD
+        or q_ratio >= GARBLED_QMARK_THRESHOLD
+    )
+
+
 def extract_pdf_text(pdf_path, max_pages):
-    """Native local text extraction via pdfplumber; returns combined text or None."""
+    """Native local text extraction via pdfplumber; returns combined text or None.
+
+    Returns None when there is no text layer OR the extraction is garbled
+    (broken ToUnicode mapping), so the caller falls back to rendered pages.
+    """
     try:
         import pdfplumber
     except ImportError:
         return None
     try:
+        # pdfminer can spam "FontBBox" warnings for broken font descriptors;
+        # suppress them - garbled mappings are handled by is_garbled_text().
+        with contextlib.redirect_stderr(io.StringIO()):
+            with pdfplumber.open(pdf_path) as pdf:
+                total = len(pdf.pages)
+                raw_pages = []
+                for i, page in enumerate(pdf.pages):
+                    if i >= max_pages:
+                        break
+                    raw_pages.append(page.extract_text() or "")
+        raw = "\n".join(raw_pages)
+        if is_garbled_text(raw):
+            sys.stderr.write(
+                f"[pdf] native text extraction looks garbled "
+                f"({garbled_ratio(raw):.0%} suspicious chars); "
+                "falling back to rendered pages.\n"
+            )
+            return None
         parts = []
-        with pdfplumber.open(pdf_path) as pdf:
-            total = len(pdf.pages)
-            for i, page in enumerate(pdf.pages):
-                if i >= max_pages:
-                    break
-                t = (page.extract_text() or "").strip()
-                if t:
-                    parts.append(f"===== PDF page {i + 1}/{min(total, max_pages)} (text) =====\n{t}")
+        for i, t in enumerate(raw_pages):
+            t = t.strip()
+            if t:
+                parts.append(f"===== PDF page {i + 1}/{min(total, max_pages)} (text) =====\n{t}")
         return "\n\n".join(parts) if parts else None
     except Exception:
         return None
@@ -376,7 +434,7 @@ def process_pdf(source, local, tmpdir, args, pdf_max_pages, pdf_dpi):
             sys.stdout.write(text + "\n")
             sys.stderr.write("engine: pdf native text extraction\n")
             return 0
-        sys.stderr.write("no extractable text (scanned/image PDF); falling back to rendered pages.\n")
+        sys.stderr.write("no usable native text (scanned or garbled); falling back to rendered pages.\n")
 
     if importlib.util.find_spec("fitz") is None:
         sys.stderr.write("ERROR: PDF support needs PyMuPDF. Run: pip install PyMuPDF\n")
