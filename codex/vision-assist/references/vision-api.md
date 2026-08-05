@@ -24,9 +24,10 @@ free, local, and noticeably more accurate for Chinese.
 ## Zhipu (default free provider)
 
 - Endpoint: `https://open.bigmodel.cn/api/paas/v4/chat/completions`
-- Free models (tried in this order): `glm-4.6v-flash` (default, best overall),
-  `glm-4.1v-thinking-flash` (reasoning; stronger on charts/GUI), `glm-4v-flash`
-  (oldest but stable; 1024-token output cap)
+- Free models (tried in this order): `glm-4.1v-thinking-flash` (default since
+  2026-08-05, while `glm-4.6v-flash` is persistently overloaded), `glm-4.6v-flash`
+  (fastest when healthy; restore as primary once a direct call succeeds),
+  `glm-4v-flash` (oldest but stable; 1024-token output cap)
 - Only `glm-4.6v-flash` and `glm-4.1v-thinking-flash` accept `file_url` input
   (PDF/documents); `glm-4v-flash` is image-only.
 - Docs: <https://docs.bigmodel.cn/cn/guide/start/model-overview>
@@ -56,8 +57,8 @@ free, local, and noticeably more accurate for Chinese.
 {
   "api_key": "your-free-zhipu-key",
   "endpoint": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-  "model": "glm-4.6v-flash",
-  "fallback_models": ["glm-4.1v-thinking-flash", "glm-4v-flash"],
+  "model": "glm-4.1v-thinking-flash",
+  "fallback_models": ["glm-4.6v-flash", "glm-4v-flash"],
   "allowed_models": ["deepseek-v4-flash", "deepseek-v4-pro"],
   "timeout_ms": 60000,
   "max_tokens": 4000,
@@ -71,7 +72,7 @@ Env overrides (first match wins): `VISION_API_KEY`, `VISION_API_MODEL`,
 `VISION_API_ENDPOINT`, `VISION_TIMEOUT_MS`, `VISION_ALLOWED_MODELS`,
 `VISION_MIN_REPLY_CHARS`.
 
-The free API chain is: `glm-4.6v-flash` → `glm-4.1v-thinking-flash` →
+The free API chain is: `glm-4.1v-thinking-flash` → `glm-4.6v-flash` →
 `glm-4v-flash` → local OCR. `fallback_models` is tried in order when the
 primary model is rate-limited (429) or fails, before the pipeline falls back
 to local OCR.

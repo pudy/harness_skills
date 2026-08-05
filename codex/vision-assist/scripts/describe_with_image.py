@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Send an image to a FREE OpenAI-compatible vision API and print the text reply.
 
-Default provider: Zhipu (bigmodel.cn) free models, e.g. glm-4.6v-flash.
+Default provider: Zhipu (bigmodel.cn) free models, e.g. glm-4.1v-thinking-flash.
 This skill is deliberately limited to free providers; paid providers are
 handled by a separate skill and must never be configured here.
 
@@ -28,7 +28,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.environ.get("VISION_CONFIG") or os.path.join(os.path.dirname(SCRIPT_DIR), "config.json")
 
 DEFAULT_ENDPOINT = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-DEFAULT_MODEL = "glm-4.6v-flash"
+DEFAULT_MODEL = "glm-4.1v-thinking-flash"
 DEFAULT_TIMEOUT_MS = 60000
 DEFAULT_MAX_TOKENS = 4000
 DEFAULT_MIN_REPLY_CHARS = 10

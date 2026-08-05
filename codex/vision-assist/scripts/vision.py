@@ -255,7 +255,7 @@ def run_api_with_retry(image, compact, prompt, file_input=False):
     With file_input=True (PDF URLs), models without file_url support are skipped.
     """
     cfg = load_config()
-    models = [cfg.get("model") or "glm-4.6v-flash"]
+    models = [cfg.get("model") or "glm-4.1v-thinking-flash"]
     fb = cfg.get("fallback_models")
     if isinstance(fb, list):
         models += [m for m in fb if isinstance(m, str) and m]
@@ -454,7 +454,7 @@ def main():
         print(f"windows builtin ocr: {'yes' if win_ocr else 'no'}")
         print(f"free vision api key: {'configured' if has_api_key() else 'not configured'}")
         cfg = load_config()
-        print(f"api model: {cfg.get('model') or 'glm-4.6v-flash (default)'}")
+        print(f"api model: {cfg.get('model') or 'glm-4.1v-thinking-flash (default)'}")
         print(f"pdf rendering (PyMuPDF): {'yes' if importlib.util.find_spec('fitz') else 'no'}")
         return 0
 

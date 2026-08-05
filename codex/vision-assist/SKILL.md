@@ -10,7 +10,7 @@ Turn image files into readable text when the active model is text-only. Cross-pl
 ## Boundary (important)
 
 - This skill uses the **free vision API first** (Zhipu GLM free models, chain:
-  `glm-4.6v-flash` → `glm-4.1v-thinking-flash` → `glm-4v-flash`) and
+  `glm-4.1v-thinking-flash` → `glm-4.6v-flash` → `glm-4v-flash`) and
   **automatically falls back to local OCR**
   (Windows built-in / PaddleOCR / Tesseract) when the API is rate-limited or
   unreachable.
