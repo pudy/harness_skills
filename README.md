@@ -3,8 +3,13 @@
 个人技能/工具集仓库，按工具平台分类存放：
 
 - `codex/` — Codex（桌面应用 / CLI）技能
+- `pi/` — pi（coding agent）扩展
 
-## codex/vision-assist
+> 说明：仓库里有两类东西，靠目录和 README 区分——
+> **技能（skill）** 是给对应平台的「技能」机制用的（如 Codex 的 `SKILL.md`）；
+> **扩展（extension）** 是给 pi 这类带扩展 API 的平台注册工具/命令用的。
+
+## codex/vision-assist（技能 skill）
 
 识图技能：为不带原生视觉的文本模型提供读图能力（截图、照片、UI、图表、PDF）。
 
@@ -15,3 +20,12 @@
 - 从不使用付费 API；付费识图由独立技能负责
 - 跨平台：Windows / Linux / macOS
 - 安装与用法见 `codex/vision-assist/SKILL.md`
+
+## pi/balance（扩展 extension）
+
+余额查询扩展：自动在 pi 底部状态栏显示当前 provider 的账户余额，并提供 `/balance` 命令手动查看明细。
+
+- **自动跟随 provider**：OpenRouter → `GET /api/v1/auth/key`（`limit_remaining`，即本 key 每月真实可花额度）；DeepSeek → `GET /api/v1/user/balance`
+- 刷新时机：会话启动 / 切换 provider / 每轮任务结束后（60 秒内合并一次），避免无谓请求
+- 不存储任何密钥，key 走 pi 的凭证链（`~/.pi/agent/auth.json` 或环境变量）自动解析
+- 安装：把 `pi/balance/balance.ts` 放入 `~/.pi/agent/extensions/`，重启或 `/reload` 后生效
