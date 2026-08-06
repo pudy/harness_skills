@@ -1,13 +1,13 @@
 # harness_skills
 
-个人技能/工具集仓库，按工具平台分类存放：
+个人技能/工具集仓库，按工具平台分类存放。
 
-- `codex/` — Codex（桌面应用 / CLI）技能
-- `pi/` — pi（coding agent）扩展
+| 目录 | 平台 | 类型 |
+|------|------|------|
+| `codex/` | Codex（桌面应用 / CLI） | 技能 (skill) |
+| `pi/` | pi（coding agent） | 扩展 (extension) |
 
-> 说明：仓库里有两类东西，靠目录和 README 区分——
-> **技能（skill）** 是给对应平台的「技能」机制用的（如 Codex 的 `SKILL.md`）；
-> **扩展（extension）** 是给 pi 这类带扩展 API 的平台注册工具/命令用的。
+> 每个目录里放的是该平台可用的东西。**技能**（skill）走平台的技能机制（如 Codex 的 `SKILL.md`）；**扩展**（extension）走平台的扩展 API（如 pi 的 `~/.pi/agent/extensions/`）。
 
 ## codex/vision-assist（技能 skill）
 
