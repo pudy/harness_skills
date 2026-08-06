@@ -11,6 +11,7 @@
 |------|------|------|
 | `codex/vision-assist` | Codex | 技能 (skill) |
 | `pi/balance` | pi | 扩展 (extension) |
+| `opencode/balance` | opencode | TUI 插件 (plugin) |
 
 ## codex/vision-assist（技能 skill）
 
@@ -32,3 +33,12 @@
 - 刷新时机：会话启动 / 切换 provider / 每轮任务结束后（60 秒内合并一次），避免无谓请求
 - 不存储任何密钥，key 走 pi 的凭证链（`~/.pi/agent/auth.json` 或环境变量）自动解析
 - 安装：把 `pi/balance/balance.ts` 放入 `~/.pi/agent/extensions/`，重启或 `/reload` 后生效
+
+## opencode/balance（TUI 插件 plugin）
+
+余额显示插件：在 opencode TUI 输入框右侧显示**当前会话实际使用模型**的账户余额。
+
+- **OpenRouter** → `GET /api/v1/auth/key`（`limit_remaining`）；**其他 OpenAI 兼容/New API 模式 provider（如自建、公司 DeepSeek）** → `GET .../dashboard/billing/subscription` + `.../usage`
+- 跟随会话内实际用的模型，事件驱动刷新（`message.updated` / `session.updated` / `session.next.model.switched`），模型没变不打网络请求
+- 不存储密钥，key 从 `~/.local/share/opencode/auth.json` 按 provider 读取
+- 安装与依赖见 `opencode/balance/README.md`
