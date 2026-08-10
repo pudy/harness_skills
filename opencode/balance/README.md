@@ -8,9 +8,13 @@
 ## 特点
 
 - **跟随会话内实际使用的模型**：余额随当前会话最后一条 assistant 消息用到的 `providerID/modelID` 显示
-- 刷新时机：启动 + `message.updated` / `session.updated` / `session.next.model.switched` 事件；按模型变化守卫，模型没变不打网络请求
+- **消息事件即时刷新**：`message.updated` 携带模型信息时立即刷新余额；切完模型发一句话即更新
+- **防抖合并**：`session.updated` 等高频事件 2s 防抖合并，事件风暴下不空转
+- **自适应心跳**：5 分钟无事件时补查一次余额（兜底），之后停止，不常驻轮询
+- **请求超时**：所有余额查询 10s 超时（AbortController），API 挂起不会卡住插件
+- **结果缓存**：同模型 5 分钟 TTL 缓存，模型没变不打网络请求
+- **并发防护**：慢的旧请求晚返回不会覆盖新模型的余额（竞态守卫）
 - 不存储密钥：key 从 `~/.local/share/opencode/auth.json` 按 provider 读取
-- 无定时器、无轮询
 
 > 注意：仅切换模型、不发送消息时是 opencode 的纯 TUI 本地状态，插件拿不到，因此**切完模型发一句话才刷新**（纯平台限制）。
 
