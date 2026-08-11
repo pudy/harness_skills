@@ -1,0 +1,31 @@
+{
+  "name": "pi-codebuddy-auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "pi extension: CodeBuddy OAuth login + account-driven model list (DeepSeek/GLM/Kimi etc.)",
+  "keywords": [
+    "pi-extension",
+    "pi-package",
+    "codebuddy"
+  ],
+  "license": "MIT",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.84.1",
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@types/node": "^24.10.0",
+    "typescript": "^6.0.0"
+  }
+}

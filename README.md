@@ -6,6 +6,7 @@
 |------|------|------|
 | `codex/vision-assist` | Codex | 技能 (skill) |
 | `pi/balance` | pi | 扩展 (extension) |
+| `pi/codebuddy-auth` | pi | 扩展 (extension) |
 | `opencode/balance` | opencode | TUI 插件 (plugin) |
 
 详见各项目目录下的 README。
