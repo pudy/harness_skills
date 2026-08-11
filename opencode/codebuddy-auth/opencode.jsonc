@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "@shatyuka/opencode-codebuddy-auth"
+  ],
+  "model": "codebuddy/deepseek-v4-flash",
+  "provider": {
+    "codebuddy": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "CodeBuddy",
+      "options": {
+        "baseURL": "https://copilot.tencent.com/v2"
+      }
+    }
+  }
+}

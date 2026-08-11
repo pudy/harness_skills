@@ -8,5 +8,6 @@
 | `pi/balance` | pi | 扩展 (extension) |
 | `pi/codebuddy-auth` | pi | 扩展 (extension) |
 | `opencode/balance` | opencode | TUI 插件 (plugin) |
+| `opencode/codebuddy-auth` | opencode | 部署配置 (config 模板) |
 
 详见各项目目录下的 README。
