@@ -4,6 +4,11 @@ opencode 用 CodeBuddy 订阅模型的部署说明（不维护源码，直接用
 
 > 对应 pi 侧的同名扩展见 `pi/codebuddy-auth`。本目录只是 opencode 的**部署配置模板**，不含插件源码——从 npm 装原版，靠配置文件定制。
 
+## 上游项目
+
+- **插件（GitHub 源码）**：https://github.com/shatyuka/opencode-codebuddy-auth
+- **安装来源**：npm 原版 `@shatyuka/opencode-codebuddy-auth`（未改源码，仅配置定制）。升级 `opencode plugin @shatyuka/opencode-codebuddy-auth -g --force`。
+
 ## 三步部署
 
 1. **合并配置**：把下面 `opencode.jsonc` 模板里的 `plugin` 与 `model` 合并进 `~/.config/opencode/opencode.jsonc`（保留你已有的 provider 等配置）。
