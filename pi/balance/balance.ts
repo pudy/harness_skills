@@ -5,16 +5,21 @@
  * status bar, and provides a /balance command for a detailed manual check.
  *
  * Provider is auto-detected from the active model, so it adapts automatically:
- *   - OpenRouter  -> GET https://openrouter.ai/api/v1/credits
- *   - DeepSeek    -> GET https://api.deepseek.com/user/balance
+ *   - OpenRouter  -> GET /api/v1/auth/key  (limit_remaining, the real spendable
+ *                    limit for THIS key)
+ *   - DeepSeek    -> GET /api/v1/user/balance (total_balance)
+ *   - CodeBuddy   -> GET /v3/config (no public balance endpoint; lists model
+ *                    credit pricing instead)
  *
  * Usage:
  *   /balance                 -> detailed check of the current provider
  *   /balance deepseek        -> force-check a specific provider
  *   /balance openrouter      -> force-check a specific provider
+ *   /balance codebuddy       -> force-check a specific provider
  *
- * The API key is resolved through pi's normal credential chain (CLI --api-key,
- * auth.json, or environment variable), so no secret is stored here.
+ * The API key / auth is resolved through pi's normal credential chain
+ * (CLI --api-key, auth.json, or environment variable), so no secret is stored
+ * here. CodeBuddy uses its OAuth-derived headers (x-domain, x-user-id, ...).
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
@@ -24,12 +29,22 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 // settled agent run instead of using a timer.
 const MIN_AUTO_REFRESH_MS = 60 * 1000;
 
-const ENDPOINTS: Record<string, { url: string; parse: (json: any) => string[] }> = {
+interface EndpointConfig {
+	base: string;
+	url: string;
+	/** "api_key" -> only Bearer token is needed; "oauth_headers" -> resolved provider headers required. */
+	auth: "api_key" | "oauth_headers";
+	parse: (json: any) => string[];
+}
+
+const ENDPOINTS: Record<string, EndpointConfig> = {
 	openrouter: {
 		// /credits returns the account-level lifetime ledger, which is misleading
 		// for "how much can I spend". /auth/key reports the real spendable limit
 		// for THIS key (limit_remaining), so we use that as the balance.
-		url: "https://openrouter.ai/api/v1/auth/key",
+		base: "https://openrouter.ai",
+		url: "/api/v1/auth/key",
+		auth: "api_key",
 		parse: (json) => {
 			const d = json?.data ?? {};
 			const remaining = d.limit_remaining != null ? Number(d.limit_remaining) : NaN;
@@ -44,7 +59,9 @@ const ENDPOINTS: Record<string, { url: string; parse: (json: any) => string[] }>
 		},
 	},
 	deepseek: {
-		url: "https://api.deepseek.com/user/balance",
+		base: "https://api.deepseek.com",
+		url: "/user/balance",
+		auth: "api_key",
 		parse: (json) => {
 			const infos: Array<{ currency?: string; total_balance?: string; granted_balance?: string; topped_up_balance?: string }> =
 				json?.balance_infos ?? [];
@@ -61,22 +78,60 @@ const ENDPOINTS: Record<string, { url: string; parse: (json: any) => string[] }>
 			});
 		},
 	},
+	codebuddy: {
+		// CodeBuddy's coding gateway exposes no account balance endpoint, so we
+		// list per-model credit pricing from the live product config instead.
+		base: "https://copilot.tencent.com",
+		url: "/v3/config",
+		auth: "oauth_headers",
+		parse: (json) => {
+			const models: Array<{ id?: string; name?: string; credits?: string }> =
+				json?.data?.models ?? [];
+			const ds = models.filter((m) => typeof m?.id === "string" && m.id.includes("deepseek"));
+			const lines = ds.map((m) => `${m.name ?? m.id}: ${m.credits ?? "n/a"}`);
+			lines.push(`${models.length} models total`);
+			return lines;
+		},
+	},
 };
 
 function providerName(provider: string): string {
 	return provider.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-async function fetchBalance(provider: string, apiKey: string): Promise<string[]> {
-	const cfg = ENDPOINTS[provider];
-	if (!cfg) return [`No balance endpoint defined for provider "${provider}".`];
+interface ResolvedAuth {
+	apiKey: string;
+	headers: Record<string, string>;
+}
 
+async function resolveAuth(
+	ctx: ExtensionContext,
+	provider: string,
+	cfg: EndpointConfig,
+): Promise<ResolvedAuth | undefined> {
+	if (cfg.auth === "oauth_headers") {
+		const auth = await ctx.modelRegistry.getProviderAuth(provider).catch(() => undefined);
+		const apiKey = auth?.auth?.apiKey;
+		if (!apiKey) return undefined;
+		return {
+			apiKey,
+			headers: { ...(auth.auth.headers ?? {}) },
+		};
+	}
+	const apiKey = await ctx.modelRegistry.getApiKeyForProvider(provider).catch(() => undefined);
+	if (!apiKey) return undefined;
+	return { apiKey, headers: {} };
+}
+
+async function fetchBalance(cfg: EndpointConfig, auth: ResolvedAuth): Promise<string[]> {
+	const url = cfg.url.startsWith("http") ? cfg.url : cfg.base + cfg.url;
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), 15000);
 	try {
-		const res = await fetch(cfg.url, {
+		const res = await fetch(url, {
 			headers: {
-				Authorization: `Bearer ${apiKey}`,
+				...auth.headers,
+				Authorization: `Bearer ${auth.apiKey}`,
 				Accept: "application/json",
 			},
 			signal: controller.signal,
@@ -110,7 +165,8 @@ export default function (pi: ExtensionAPI) {
 
 			// Provider without a known balance endpoint: show it clearly instead
 			// of silently keeping a stale balance from a previous provider.
-			if (!ENDPOINTS[provider]) {
+			const cfg = ENDPOINTS[provider];
+			if (!cfg) {
 				current.ui.setStatus(
 					"balance",
 					`💳 ${providerName(provider)}: unsupported`,
@@ -118,18 +174,16 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const apiKey = await current.modelRegistry
-				.getApiKeyForProvider(provider)
-				.catch(() => undefined);
+			const auth = await resolveAuth(current, provider, cfg);
 			lastFetch = Date.now();
-			if (!apiKey) {
+			if (!auth) {
 				current.ui.setStatus(
 					"balance",
 					`💳 ${providerName(provider)}: no API key`,
 				);
 				return;
 			}
-			const lines = await fetchBalance(provider, apiKey);
+			const lines = await fetchBalance(cfg, auth);
 			// Show a short "first line" style summary in the footer.
 			current.ui.setStatus("balance", `💳 ${providerName(provider)}: ${lines[0] ?? "n/a"}`);
 		} catch {
@@ -166,7 +220,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("balance", {
-		description: "Show the current provider's account balance (OpenRouter / DeepSeek)",
+		description: "Show the current provider's account balance (OpenRouter / DeepSeek / CodeBuddy)",
 		handler: async (args, ctx) => {
 			const requested = args.trim().toLowerCase();
 			const provider = requested && ENDPOINTS[requested] ? requested : ctx.model?.provider?.toLowerCase() ?? "";
@@ -174,17 +228,18 @@ export default function (pi: ExtensionAPI) {
 				ctx.ui.notify("No active model/provider to check.", "error");
 				return;
 			}
-			if (!ENDPOINTS[provider]) {
+			const cfg = ENDPOINTS[provider];
+			if (!cfg) {
 				ctx.ui.notify(
 					`No balance endpoint for provider "${provider}" (unsupported).`, "error"
 				);
 				return;
 			}
 
-			ctx.ui.notify(`Checking ${providerName(provider)} balance...`, "info");
+			ctx.ui.notify(`Checking ${providerName(provider)}...`, "info");
 
-			const apiKey = await ctx.modelRegistry.getApiKeyForProvider(provider).catch(() => undefined);
-			if (!apiKey) {
+			const auth = await resolveAuth(ctx, provider, cfg);
+			if (!auth) {
 				ctx.ui.notify(
 					`No API key configured for "${provider}". Use /login ${provider} or set its environment variable.`,
 					"error",
@@ -192,7 +247,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const lines = await fetchBalance(provider, apiKey);
+			const lines = await fetchBalance(cfg, auth);
 			void refresh(true); // sync the footer after a manual detailed check
 			const summary = `${providerName(provider)}: ${lines.join(" | ")}`;
 			console.log(`\n[balance] ${summary}`);
