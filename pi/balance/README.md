@@ -4,6 +4,7 @@
 
 - **OpenRouter** → `GET /api/v1/auth/key`（`limit_remaining`，即当前 key 的真实剩余额度）
 - **DeepSeek** → `GET https://api.deepseek.com/user/balance`（`total_balance`）
+- **其他 provider（如 codebuddy）** → 无公开余额接口，状态栏显示 `unsupported`，不会残留旧余额
 
 ## 特点
 

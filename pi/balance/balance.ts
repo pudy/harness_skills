@@ -106,7 +106,17 @@ export default function (pi: ExtensionAPI) {
 		try {
 			const provider =
 				(activeProvider || current.model?.provider?.toLowerCase() || "").trim();
-			if (!provider || !ENDPOINTS[provider]) return;
+			if (!provider) return;
+
+			// Provider without a known balance endpoint: show it clearly instead
+			// of silently keeping a stale balance from a previous provider.
+			if (!ENDPOINTS[provider]) {
+				current.ui.setStatus(
+					"balance",
+					`💳 ${providerName(provider)}: unsupported`,
+				);
+				return;
+			}
 
 			const apiKey = await current.modelRegistry
 				.getApiKeyForProvider(provider)
@@ -162,6 +172,12 @@ export default function (pi: ExtensionAPI) {
 			const provider = requested && ENDPOINTS[requested] ? requested : ctx.model?.provider?.toLowerCase() ?? "";
 			if (!provider) {
 				ctx.ui.notify("No active model/provider to check.", "error");
+				return;
+			}
+			if (!ENDPOINTS[provider]) {
+				ctx.ui.notify(
+					`No balance endpoint for provider "${provider}" (unsupported).`, "error"
+				);
 				return;
 			}
 
