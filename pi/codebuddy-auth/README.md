@@ -5,6 +5,8 @@
 单文件扩展（`index.ts`），基于 [Lbryany/pi-plugins](https://github.com/Lbryany/pi-plugins) 的 `extensions/codebuddy` 改造：
 
 - **账户驱动模型列表**：模型 100% 来自 `GET /v3/config`（企业账号再叠加 `/console/enterprises/{id}/config/models`）。账户新增的 DeepSeek 等模型会自动出现。
+- **思考档位自动适配**：按模型 id 自动推导 `thinkingLevelMap`（基于 DeepSeek 2026-07-31 官方文档：`reasoning_effort` 仅 `low/high/max` 合法；`deepseek-v4-flash` 支持三档，`deepseek-v4-pro` 支持 `high/max` 两档）。pi 的 `minimal/medium/xhigh` 不合法或映射到 high，自动禁用，循环里只显示模型真实支持的档位。
+- **默认思考强度 max**：请求未显式指定 effort 时兑底注入 `reasoning_effort=max`；选择 `off`（关闭思考）时**不注入**，避免被默认值顶成 max。
 - **去掉 cli/chat 可见性过滤**：原版会按 `cli` agent / `chat` 标签裁剪模型，本版全量展示。
 - **默认国内站**：`https://copilot.tencent.com` + `platform=CLI`（与 opencode 的 codebuddy 插件一致），可用 `PI_CODEBUDDY_PLATFORM` 覆盖。
 - 保留原版其余逻辑：浏览器 OAuth 登录、token 刷新、CodeBuddy 网关请求 envelope（`agent:"cli"`、CLI 请求头）、个人/企业账号支持。
@@ -32,7 +34,7 @@ cp index.ts ~/.pi/agent/extensions/codebuddy-account-driven/index.ts
 | `PI_CODEBUDDY_PLATFORM` | `CLI` | 认证 platform（国内站 `CLI` / 国际站 `codebuddy`） |
 | `PI_CODEBUDDY_ENVELOPE` | 开 | 请求 envelope 总开关；`off` 时纯 OpenAI body |
 | `PI_CODEBUDDY_AGENT_TAG` | `cli` | 逐条 user message 附加的 `agent` 标记 |
-| `PI_CODEBUDDY_REASONING_EFFORT` | `high` | 默认 reasoning_effort |
+| `PI_CODEBUDDY_REASONING_EFFORT` | `max` | 默认 reasoning_effort（`off` 时不注入） |
 | `PI_CODEBUDDY_STREAM_OPTIONS` | 开 | 注入 `stream_options.include_usage` |
 | `PI_CODEBUDDY_TEMPERATURE` | `1` | 默认 temperature |
 | `PI_CODEBUDDY_CLI_HEADERS` | 开 | 额外 CLI 请求头 |
