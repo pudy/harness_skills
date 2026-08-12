@@ -34,7 +34,7 @@ interface EndpointConfig {
 	url: string;
 	/** "api_key" -> only Bearer token is needed; "oauth_headers" -> resolved provider headers required. */
 	auth: "api_key" | "oauth_headers";
-	parse: (json: any) => string[];
+	parse: (json: any, preferId?: string) => string[];
 }
 
 const ENDPOINTS: Record<string, EndpointConfig> = {
@@ -84,11 +84,21 @@ const ENDPOINTS: Record<string, EndpointConfig> = {
 		base: "https://copilot.tencent.com",
 		url: "/v3/config",
 		auth: "oauth_headers",
-		parse: (json) => {
+		parse: (json, preferId) => {
 			const models: Array<{ id?: string; name?: string; credits?: string }> =
 				json?.data?.models ?? [];
 			const ds = models.filter((m) => typeof m?.id === "string" && m.id.includes("deepseek"));
 			const lines = ds.map((m) => `${m.name ?? m.id}: ${m.credits ?? "n/a"}`);
+			// The footer shows lines[0]; put the currently active model's price
+			// first so the footer reflects the model actually in use, not the
+			// arbitrary order of the models array.
+			if (preferId) {
+				const idx = ds.findIndex((m) => m.id === preferId);
+				if (idx > 0) {
+					const [line] = lines.splice(idx, 1);
+					lines.unshift(line);
+				}
+			}
 			lines.push(`${models.length} models total`);
 			return lines;
 		},
@@ -123,7 +133,11 @@ async function resolveAuth(
 	return { apiKey, headers: {} };
 }
 
-async function fetchBalance(cfg: EndpointConfig, auth: ResolvedAuth): Promise<string[]> {
+async function fetchBalance(
+	cfg: EndpointConfig,
+	auth: ResolvedAuth,
+	preferId?: string,
+): Promise<string[]> {
 	const url = cfg.url.startsWith("http") ? cfg.url : cfg.base + cfg.url;
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), 15000);
@@ -141,7 +155,7 @@ async function fetchBalance(cfg: EndpointConfig, auth: ResolvedAuth): Promise<st
 			return [`Request failed with HTTP ${res.status}: ${body.slice(0, 200)}`];
 		}
 		const json = await res.json().catch(() => ({}));
-		return cfg.parse(json);
+		return cfg.parse(json, preferId);
 	} finally {
 		clearTimeout(timer);
 	}
@@ -183,7 +197,7 @@ export default function (pi: ExtensionAPI) {
 				);
 				return;
 			}
-			const lines = await fetchBalance(cfg, auth);
+			const lines = await fetchBalance(cfg, auth, current.model?.id);
 			// Show a short "first line" style summary in the footer.
 			current.ui.setStatus("balance", `💳 ${providerName(provider)}: ${lines[0] ?? "n/a"}`);
 		} catch {
@@ -247,7 +261,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const lines = await fetchBalance(cfg, auth);
+			const lines = await fetchBalance(cfg, auth, ctx.model?.id);
 			void refresh(true); // sync the footer after a manual detailed check
 			const summary = `${providerName(provider)}: ${lines.join(" | ")}`;
 			console.log(`\n[balance] ${summary}`);
