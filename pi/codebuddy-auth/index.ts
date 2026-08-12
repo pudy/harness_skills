@@ -290,7 +290,7 @@ export const ENVELOPE: EnvelopeConfig = {
   })(),
   reasoningEffort: (() => {
     const value = envText("PI_CODEBUDDY_REASONING_EFFORT");
-    if (value === undefined) return "high";
+    if (value === undefined) return "max";
     return envDisabled(value) ? undefined : value;
   })(),
   streamOptions: envFlag("PI_CODEBUDDY_STREAM_OPTIONS", true),
@@ -914,6 +914,7 @@ export function prepareCodeBuddyPayload(
   payload: unknown,
   model: Model<Api>,
   envelope: EnvelopeConfig = ENVELOPE,
+  callerReasoningEffort?: string,
 ): unknown {
   const params = asRecord(payload);
   if (!params || !envelope.enabled) return payload;
@@ -931,10 +932,11 @@ export function prepareCodeBuddyPayload(
   if (envelope.streamOptions && result.stream_options === undefined) {
     result.stream_options = { include_usage: true };
   }
-  // Only when the model actually reasons and the caller did not set an effort:
-  // never force reasoning onto a non-reasoning model.
+  // 兜底注入 reasoning_effort：仅当调用方确实要推理（给了 effort）且请求里
+  // 还没带 effort 时。off（无 effort）不注入，避免关闭思考被顶成 max。
   if (
     model.reasoning &&
+    callerReasoningEffort !== undefined &&
     envelope.reasoningEffort !== undefined &&
     result.reasoning_effort === undefined
   ) {
@@ -966,11 +968,17 @@ function withCodeBuddyPayload<T extends StreamOptions>(
 ): T & StreamOptions {
   const callerPayload = options?.onPayload;
   const callerResponse = options?.onResponse;
+  const reasoningEffort = options?.reasoningEffort;
   return {
     ...(options ?? ({} as T)),
     async onPayload(payload, model) {
       const replacement = await callerPayload?.(payload, model);
-      return prepareCodeBuddyPayload(replacement ?? payload, model, envelope);
+      return prepareCodeBuddyPayload(
+        replacement ?? payload,
+        model,
+        envelope,
+        reasoningEffort,
+      );
     },
     async onResponse(response, model) {
       await callerResponse?.(response, model);
@@ -1555,6 +1563,25 @@ export const refresh = defaultOAuth.refresh;
 export const toAuth = defaultOAuth.toAuth;
 
 /** Map one CodeBuddy product-model entry to a pi-ai model. */
+function buildThinkingLevelMap(id: string): Model<"openai-completions">["thinkingLevelMap"] {
+  // 官方文档（2026-07-31 最新）规则：
+  //   reasoning_effort 合法值仅 low/high/max；medium、xhigh 会被映射到 high。
+  //   - deepseek-v4-flash：支持 low/high/max 三档
+  //   - deepseek-v4-pro：  支持 high/max 两档（low 按 high、xhigh 按 max 处理）
+  // 其他模型保守按 low/high/max 三档。
+  // pi 的 minimal 官方不认，统一禁用。off 不写 = 默认支持（pi 内部对 off
+  // 不传 effort，循环里仍能选择关闭思考）。xhigh 官方映射为 high，直接禁用。
+  const isPro = /deepseek-v4-pro/.test(id);
+  return {
+    minimal: null,
+    medium: null,
+    low: isPro ? null : "low",
+    high: "high",
+    xhigh: null,
+    max: "max",
+  };
+}
+
 function toPiModel(
   entry: unknown,
   siteRoot: string,
@@ -1581,6 +1608,7 @@ function toPiModel(
     provider: PROVIDER_ID,
     baseUrl,
     reasoning,
+    thinkingLevelMap: buildThinkingLevelMap(id),
     input: supportsImages ? ["text", "image"] : ["text"],
     cost: ZERO_COST,
     contextWindow: optionalNumber(record.maxInputTokens) ?? 176_000,
