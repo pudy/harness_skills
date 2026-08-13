@@ -1,15 +1,12 @@
 import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { createSignal, onCleanup } from "solid-js"
+import { createSignal } from "solid-js"
 import { jsx } from "@opentui/solid/jsx-runtime"
 
 const id = "balance"
 const OR_BASE = "https://openrouter.ai/api/v1"
-const FETCH_TIMEOUT_MS = 10_000
-const CACHE_TTL_MS = 5 * 60 * 1000
-const POLL_MS = 5 * 60 * 1000
-const DEBOUNCE_MS = 2_000
+const CB_BASE = "https://copilot.tencent.com"
 
 async function readAuth() {
   try {
@@ -26,22 +23,26 @@ async function readAuth() {
   }
 }
 
-const fetchWithTimeout = async (url, options) => {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+async function readCodebuddyAuth() {
   try {
-    return await fetch(url, { ...options, signal: controller.signal })
-  } finally {
-    clearTimeout(timer)
+    const f = join(homedir(), ".config", "opencode", "codebuddy.json")
+    const raw = await readFile(f, "utf8")
+    const json = JSON.parse(raw)
+    return {
+      accessToken: json?.auth?.accessToken,
+      domain: json?.auth?.domain,
+      uid: json?.account?.uid,
+      enterpriseId: json?.account?.enterpriseId,
+    }
+  } catch {
+    return undefined
   }
 }
 
 async function fetchBalance(provider, key, baseURL) {
   try {
     if (provider === "openrouter") {
-      const res = await fetchWithTimeout(`${OR_BASE}/auth/key`, {
-        headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
-      })
+      const res = await fetch(`${OR_BASE}/auth/key`, { headers: { Authorization: `Bearer ${key}` } })
       if (!res.ok) return { ok: false, label: `HTTP ${res.status}` }
       const data = await res.json()
       const remaining = data?.data?.limit_remaining
@@ -51,16 +52,16 @@ async function fetchBalance(provider, key, baseURL) {
 
     const base = (baseURL ?? "").replace(/\/+$/, "")
     if (!base) return { ok: false, label: "no url" }
-    const headers = { Authorization: `Bearer ${key}`, Accept: "application/json" }
+    const headers = { Authorization: `Bearer ${key}` }
 
-    const sub = await fetchWithTimeout(`${base}/dashboard/billing/subscription`, { headers })
+    const sub = await fetch(`${base}/dashboard/billing/subscription`, { headers })
     let limit
     if (sub.ok) {
       const json = await sub.json()
       limit = json?.soft_limit_usd ?? json?.hard_limit_usd
     }
 
-    const usageRes = await fetchWithTimeout(`${base}/dashboard/billing/usage`, { headers })
+    const usageRes = await fetch(`${base}/dashboard/billing/usage`, { headers })
     let usedCents
     if (usageRes.ok) {
       const json = await usageRes.json()
@@ -75,124 +76,99 @@ async function fetchBalance(provider, key, baseURL) {
     return { ok: false, label: "n/a" }
   } catch (e) {
     const msg = (e && e.message) || String(e)
-    if (e?.name === "AbortError") return { ok: false, label: "timeout" }
+    return { ok: false, label: `err:${msg.slice(0, 40)}` }
+  }
+}
+
+async function fetchCodebuddyCredits(modelId, auth) {
+  try {
+    const headers = {
+      Accept: "application/json",
+      Authorization: `Bearer ${auth.accessToken}`,
+      "User-Agent": "CodeBuddyIDE/4.9.8 CodeBuddy/4.9.8",
+      "X-Domain": auth.domain,
+      "X-User-Id": auth.uid,
+    }
+    if (auth.enterpriseId) headers["X-Enterprise-Id"] = auth.enterpriseId
+    const res = await fetch(`${CB_BASE}/v3/config`, { headers })
+    if (!res.ok) return { ok: false, label: `HTTP ${res.status}` }
+    const data = await res.json()
+    const models = data?.data?.models ?? []
+    const m = models.find((x) => x?.id === modelId)
+    if (m) return { ok: true, label: `${m.credits ?? "n/a"}` }
+    return { ok: false, label: "n/a" }
+  } catch (e) {
+    const msg = (e && e.message) || String(e)
     return { ok: false, label: `err:${msg.slice(0, 40)}` }
   }
 }
 
 const tui = async (api) => {
   const keys = await readAuth()
-  const cache = new Map()
   const [bal, setBal] = createSignal({ ok: false, label: "…" })
   let lastModel = ""
   let activeSessionId = undefined
 
-  const show = async (model) => {
+  const apply = (result) => {
+    const cur = bal()
+    if (cur.label === result.label && cur.ok === result.ok) return
+    setBal(result)
+  }
+
+  const modelFromSession = (sessionId) => {
+    const s = api.state.session.get(sessionId)
+    if (s?.model?.providerID && s.model.id) return `${s.model.providerID}/${s.model.id}`
+    return undefined
+  }
+
+  const show = async (model, force = false) => {
     if (!model) return
-    if (model === lastModel) return
-    lastModel = model
     const provider = model.split("/")[0]
-    const cached = cache.get(model)
-    if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
-      setBal(cached.result)
-      return
-    }
+    if (model === lastModel && (!force || provider === "codebuddy")) return
+    lastModel = model
+    const modelId = model.slice(provider.length + 1)
     let result
-    if (!keys[provider]) {
+    if (provider === "codebuddy") {
+      const auth = await readCodebuddyAuth()
+      result = auth ? await fetchCodebuddyCredits(modelId, auth) : { ok: false, label: "no auth" }
+    } else if (!keys[provider]) {
       result = { ok: false, label: `${provider}:no key` }
     } else {
       const found = api.state.provider.find((p) => p.id === provider)
       result = await fetchBalance(provider, keys[provider], found?.options?.baseURL)
-      cache.set(model, { result, at: Date.now() })
     }
-    if (model === lastModel) setBal(result)
+    if (model !== lastModel) return
+    apply(result)
   }
 
-  const modelFromSession = (sessionId) => {
-    const list = api.state.session.messages(sessionId)
-    if (Array.isArray(list)) {
-      for (let i = list.length - 1; i >= 0; i--) {
-        const m = list[i]
-        if (m?.role === "assistant" && m.providerID && m.modelID) {
-          return `${m.providerID}/${m.modelID}`
-        }
-      }
-    }
-    const s = api.state.session.get(sessionId)
-    if (s?.model?.providerID && s.model.modelID) return `${s.model.providerID}/${s.model.modelID}`
-    return undefined
-  }
-
-  const recompute = async () => {
+  const refresh = (force = false) => {
     const model =
       (activeSessionId !== undefined ? modelFromSession(activeSessionId) : undefined) ??
       api.state.config.model ??
       ""
-    await show(model)
+    void show(model, force)
   }
 
-  let debounceTimer = undefined
-  const recomputeDebounced = () => {
-    if (debounceTimer !== undefined) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(() => {
-      debounceTimer = undefined
-      void recompute()
-    }, DEBOUNCE_MS)
-  }
-
-  let heartbeatTimer = undefined
-  const armHeartbeat = () => {
-    if (heartbeatTimer !== undefined) clearTimeout(heartbeatTimer)
-    heartbeatTimer = setTimeout(() => {
-      heartbeatTimer = undefined
-      void recompute()
-    }, POLL_MS)
-  }
-
-  const sidOf = (e) => e?.properties?.sessionID ?? e?.data?.sessionID ?? e?.sessionID
-  const modelOf = (e) => {
-    const p = e?.properties?.model ?? e?.data?.model ?? e?.model
-    return p?.providerID && p.modelID ? `${p.providerID}/${p.modelID}` : undefined
-  }
-
-  const onActivity = () => {
-    recomputeDebounced()
-    armHeartbeat()
-  }
-
-  const offs = [
-    api.event.on("message.updated", (e) => {
-      const sid = sidOf(e)
-      const info = e?.properties?.info
-      if (!sid) return
-      activeSessionId = sid
-      if (info?.providerID && info?.modelID) void show(`${info.providerID}/${info.modelID}`)
-      else onActivity()
-    }),
-    api.event.on("session.updated", (e) => {
-      const sid = sidOf(e)
-      if (!sid) return
-      activeSessionId = sid
-      onActivity()
-    }),
-    api.event.on("session.next.model.switched", (e) => {
-      const sid = sidOf(e)
-      if (!sid) return
-      activeSessionId = sid
-      const m = modelOf(e)
-      if (m) void show(m)
-      else void recompute()
-      armHeartbeat()
-    }),
-  ]
-  onCleanup(() => {
-    offs.forEach((off) => off())
-    if (debounceTimer !== undefined) clearTimeout(debounceTimer)
-    if (heartbeatTimer !== undefined) clearTimeout(heartbeatTimer)
+  api.event.on("session.status", (e) => {
+    const sid = e?.properties?.sessionID
+    const status = e?.properties?.status
+    if (!sid || status?.type !== "idle") return
+    activeSessionId = sid
+    refresh(true)
   })
 
-  void recompute()
-  armHeartbeat()
+  api.event.on("message.updated", (e) => {
+    const sid = e?.data?.sessionID
+    const info = e?.data?.info
+    if (!sid) return
+    activeSessionId = sid
+    if (info?.providerID && info?.modelID) {
+      const model = `${info.providerID}/${info.modelID}`
+      if (model !== lastModel) void show(model)
+    }
+  })
+
+  void refresh()
 
   function View() {
     const theme = api.theme.current
