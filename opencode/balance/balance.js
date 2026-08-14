@@ -78,6 +78,15 @@ const tui = async (api) => {
   }
 
   const modelFromSession = (sessionId) => {
+    const list = api.state.session.messages(sessionId)
+    if (Array.isArray(list)) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const m = list[i]
+        if (m?.role === "assistant" && m.providerID && m.modelID) {
+          return `${m.providerID}/${m.modelID}`
+        }
+      }
+    }
     const s = api.state.session.get(sessionId)
     if (s?.model?.providerID && s.model.id) return `${s.model.providerID}/${s.model.id}`
     return undefined
@@ -106,9 +115,16 @@ const tui = async (api) => {
     apply(result)
   }
 
+  const activeSid = () => {
+    const r = api.route.current
+    if (r?.name === "session") return r.params?.sessionID
+    return activeSessionId
+  }
+
   const refresh = (force = false) => {
+    const sid = activeSid()
     const model =
-      (activeSessionId !== undefined ? modelFromSession(activeSessionId) : undefined) ??
+      (sid !== undefined ? modelFromSession(sid) : undefined) ??
       api.state.config.model ??
       ""
     void show(model, force)
@@ -125,7 +141,7 @@ const tui = async (api) => {
     const sid = e?.data?.sessionID ?? e?.properties?.sessionID
     const status = e?.data?.status ?? e?.properties?.status
     if (!sid || !status) return
-    if (status.type !== "idle" && status.type !== "running") return
+    if (status.type !== "idle" && status.type !== "busy") return
     activeSessionId = sid
     refresh(true)
   })
