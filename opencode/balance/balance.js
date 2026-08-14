@@ -22,22 +22,6 @@ async function readAuth() {
   }
 }
 
-async function readCodebuddyAuth() {
-  try {
-    const f = join(homedir(), ".config", "opencode", "codebuddy.json")
-    const raw = await readFile(f, "utf8")
-    const json = JSON.parse(raw)
-    return {
-      accessToken: json?.auth?.accessToken,
-      domain: json?.auth?.domain,
-      uid: json?.account?.uid,
-      enterpriseId: json?.account?.enterpriseId,
-    }
-  } catch {
-    return undefined
-  }
-}
-
 async function fetchBalance(provider, key, baseURL) {
   try {
     if (provider === "openrouter") {
@@ -79,10 +63,6 @@ async function fetchBalance(provider, key, baseURL) {
   }
 }
 
-async function fetchCodebuddyCredits(modelId, auth) {
-  return { ok: true, label: "∞" }
-}
-
 const tui = async (api) => {
   const keys = await readAuth()
   const [bal, setBal] = createSignal({ ok: false, label: "…" })
@@ -107,18 +87,15 @@ const tui = async (api) => {
     if (!model) return
     const provider = model.split("/")[0]
     const modelChanged = model !== lastModel
-    if (!modelChanged && !force) return
-    if (!modelChanged && !force) {
-      const now = Date.now()
-      if (now - lastFetch < CD) return
+    if (!modelChanged) {
+      if (!force) return
+      if (Date.now() - lastFetch < CD) return
     }
     lastModel = model
     lastFetch = Date.now()
-    const modelId = model.slice(provider.length + 1)
     let result
     if (provider === "codebuddy") {
-      const auth = await readCodebuddyAuth()
-      result = auth ? await fetchCodebuddyCredits(modelId, auth) : { ok: false, label: "no auth" }
+      result = { ok: true, label: "∞" }
     } else if (!keys[provider]) {
       result = { ok: false, label: `${provider}:no key` }
     } else {
