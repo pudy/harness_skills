@@ -6,6 +6,17 @@ import { jsx } from "@opentui/solid/jsx-runtime"
 
 const id = "balance"
 const OR_BASE = "https://openrouter.ai/api/v1"
+const FETCH_TIMEOUT = 10_000
+
+async function fetchWithTimeout(url, options = {}, ms = FETCH_TIMEOUT) {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), ms)
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 async function readAuth() {
   try {
@@ -25,7 +36,7 @@ async function readAuth() {
 async function fetchBalance(provider, key, baseURL) {
   try {
     if (provider === "openrouter") {
-      const res = await fetch(`${OR_BASE}/auth/key`, { headers: { Authorization: `Bearer ${key}` } })
+      const res = await fetchWithTimeout(`${OR_BASE}/auth/key`, { headers: { Authorization: `Bearer ${key}` } })
       if (!res.ok) return { ok: false, label: `HTTP ${res.status}` }
       const data = await res.json()
       const remaining = data?.data?.limit_remaining
@@ -37,14 +48,14 @@ async function fetchBalance(provider, key, baseURL) {
     if (!base) return { ok: false, label: "no url" }
     const headers = { Authorization: `Bearer ${key}` }
 
-    const sub = await fetch(`${base}/dashboard/billing/subscription`, { headers })
+    const sub = await fetchWithTimeout(`${base}/dashboard/billing/subscription`, { headers })
     let limit
     if (sub.ok) {
       const json = await sub.json()
       limit = json?.soft_limit_usd ?? json?.hard_limit_usd
     }
 
-    const usageRes = await fetch(`${base}/dashboard/billing/usage`, { headers })
+    const usageRes = await fetchWithTimeout(`${base}/dashboard/billing/usage`, { headers })
     let usedCents
     if (usageRes.ok) {
       const json = await usageRes.json()
