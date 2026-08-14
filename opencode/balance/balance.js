@@ -8,11 +8,11 @@ const id = "balance"
 const OR_BASE = "https://openrouter.ai/api/v1"
 const FETCH_TIMEOUT = 10_000
 
-async function fetchWithTimeout(url, options = {}, ms = FETCH_TIMEOUT) {
+async function withTimeout(ms, fn) {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), ms)
   try {
-    return await fetch(url, { ...options, signal: ctrl.signal })
+    return await fn(ctrl.signal)
   } finally {
     clearTimeout(timer)
   }
@@ -36,9 +36,11 @@ async function readAuth() {
 async function fetchBalance(provider, key, baseURL) {
   try {
     if (provider === "openrouter") {
-      const res = await fetchWithTimeout(`${OR_BASE}/auth/key`, { headers: { Authorization: `Bearer ${key}` } })
-      if (!res.ok) return { ok: false, label: `HTTP ${res.status}` }
-      const data = await res.json()
+      const data = await withTimeout(FETCH_TIMEOUT, async (signal) => {
+        const res = await fetch(`${OR_BASE}/auth/key`, { headers: { Authorization: `Bearer ${key}` }, signal })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return await res.json()
+      })
       const remaining = data?.data?.limit_remaining
       if (typeof remaining === "number") return { ok: true, label: `$${remaining.toFixed(2)}` }
       return { ok: false, label: "n/a" }
@@ -48,18 +50,23 @@ async function fetchBalance(provider, key, baseURL) {
     if (!base) return { ok: false, label: "no url" }
     const headers = { Authorization: `Bearer ${key}` }
 
-    const sub = await fetchWithTimeout(`${base}/dashboard/billing/subscription`, { headers })
-    let limit
-    if (sub.ok) {
-      const json = await sub.json()
-      limit = json?.soft_limit_usd ?? json?.hard_limit_usd
-    }
+    const sub = await withTimeout(FETCH_TIMEOUT, async (signal) => {
+      const res = await fetch(`${base}/dashboard/billing/subscription`, { headers, signal })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return await res.json()
+    })
+    const limit = sub?.soft_limit_usd ?? sub?.hard_limit_usd
 
-    const usageRes = await fetchWithTimeout(`${base}/dashboard/billing/usage`, { headers })
     let usedCents
-    if (usageRes.ok) {
-      const json = await usageRes.json()
-      usedCents = json?.total_usage
+    try {
+      const usage = await withTimeout(FETCH_TIMEOUT, async (signal) => {
+        const res = await fetch(`${base}/dashboard/billing/usage`, { headers, signal })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return await res.json()
+      })
+      usedCents = usage?.total_usage
+    } catch {
+      usedCents = undefined
     }
 
     if (typeof limit === "number" && typeof usedCents === "number") {
@@ -70,6 +77,7 @@ async function fetchBalance(provider, key, baseURL) {
     return { ok: false, label: "n/a" }
   } catch (e) {
     const msg = (e && e.message) || String(e)
+    if (e?.name === "AbortError") return { ok: false, label: "timeout" }
     return { ok: false, label: `err:${msg.slice(0, 40)}` }
   }
 }
