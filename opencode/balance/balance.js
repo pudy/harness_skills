@@ -6,7 +6,6 @@ import { jsx } from "@opentui/solid/jsx-runtime"
 
 const id = "balance"
 const OR_BASE = "https://openrouter.ai/api/v1"
-const CB_BASE = "https://copilot.tencent.com"
 
 async function readAuth() {
   try {
@@ -81,26 +80,7 @@ async function fetchBalance(provider, key, baseURL) {
 }
 
 async function fetchCodebuddyCredits(modelId, auth) {
-  try {
-    const headers = {
-      Accept: "application/json",
-      Authorization: `Bearer ${auth.accessToken}`,
-      "User-Agent": "CodeBuddyIDE/4.9.8 CodeBuddy/4.9.8",
-      "X-Domain": auth.domain,
-      "X-User-Id": auth.uid,
-    }
-    if (auth.enterpriseId) headers["X-Enterprise-Id"] = auth.enterpriseId
-    const res = await fetch(`${CB_BASE}/v3/config`, { headers })
-    if (!res.ok) return { ok: false, label: `HTTP ${res.status}` }
-    const data = await res.json()
-    const models = data?.data?.models ?? []
-    const m = models.find((x) => x?.id === modelId)
-    if (m) return { ok: true, label: `${m.credits ?? "n/a"}` }
-    return { ok: false, label: "n/a" }
-  } catch (e) {
-    const msg = (e && e.message) || String(e)
-    return { ok: false, label: `err:${msg.slice(0, 40)}` }
-  }
+  return { ok: true, label: "∞" }
 }
 
 const tui = async (api) => {
@@ -108,6 +88,8 @@ const tui = async (api) => {
   const [bal, setBal] = createSignal({ ok: false, label: "…" })
   let lastModel = ""
   let activeSessionId = undefined
+  const CD = 90_000
+  let lastFetch = 0
 
   const apply = (result) => {
     const cur = bal()
@@ -124,8 +106,14 @@ const tui = async (api) => {
   const show = async (model, force = false) => {
     if (!model) return
     const provider = model.split("/")[0]
-    if (model === lastModel && (!force || provider === "codebuddy")) return
+    const modelChanged = model !== lastModel
+    if (!modelChanged && !force) return
+    if (!modelChanged && !force) {
+      const now = Date.now()
+      if (now - lastFetch < CD) return
+    }
     lastModel = model
+    lastFetch = Date.now()
     const modelId = model.slice(provider.length + 1)
     let result
     if (provider === "codebuddy") {
@@ -149,10 +137,18 @@ const tui = async (api) => {
     void show(model, force)
   }
 
+  api.event.on("session.created", (e) => {
+    const sid = e?.data?.sessionID
+    if (!sid) return
+    activeSessionId = sid
+    refresh(true)
+  })
+
   api.event.on("session.status", (e) => {
-    const sid = e?.properties?.sessionID
-    const status = e?.properties?.status
-    if (!sid || status?.type !== "idle") return
+    const sid = e?.data?.sessionID ?? e?.properties?.sessionID
+    const status = e?.data?.status ?? e?.properties?.status
+    if (!sid || !status) return
+    if (status.type !== "idle" && status.type !== "running") return
     activeSessionId = sid
     refresh(true)
   })
